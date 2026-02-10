@@ -1,0 +1,5 @@
+{
+  "name": "italki-manager",
+  "version": "1.2.3",
+  "description": "italki Mandarin Chinese teacher search, indexing, and lesson booking via hybrid HTTP API + browser automation"
+}
