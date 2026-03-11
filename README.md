@@ -30,7 +30,7 @@ italki Mandarin Chinese teacher search, indexing, and lesson booking via hybrid 
 ## Quick Start
 
 ```bash
-git clone https://github.com/YOUR_GITHUB_USER/claude-code-plugin-italki.git
+git clone https://github.com/bigl34/claude-code-plugin-italki.git
 cd claude-code-plugin-italki
 cp config.template.json config.json  # fill in your credentials
 cd scripts && npm install
