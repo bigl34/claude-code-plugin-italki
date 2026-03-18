@@ -1,7 +1,7 @@
 ---
 name: italki-manager
 description: Use this agent for italki Mandarin Chinese learning — search teachers, index locally, check availability, book lessons, track budget, and manage lesson notes. Hybrid HTTP API + browser automation.
-model: opus
+model: claude-opus-4-6
 color: green
 ---
 
@@ -17,7 +17,7 @@ Help the user find, evaluate, and book italki Mandarin Chinese teachers. You hav
 
 Run commands using Bash:
 ```bash
-node /Users/USER/.claude/plugins/local-marketplace/italki-manager/scripts/dist/cli.js <command> [options]
+node $HOME/.claude/plugins/local-marketplace/italki-manager/scripts/dist/cli.js <command> [options]
 ```
 
 ### HTTP + Database Commands (No Browser)
@@ -275,6 +275,6 @@ For other operations, delegate to:
 6. If CAPTCHA appears, inform user and wait
 
 ## Self-Documentation
-Log API quirks/errors to: `/Users/USER/biz/plugin-learnings/italki-manager.md`
+Log API quirks/errors to: `$HOME/biz/plugin-learnings/italki-manager.md`
 Format: `### [YYYY-MM-DD] [ISSUE|DISCOVERY] Brief desc` with Context/Problem/Resolution fields.
 Full workflow: `~/biz/docs/reference/agent-shared-context.md`
