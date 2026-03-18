@@ -22,7 +22,7 @@ chromium.use(StealthPlugin());
 
 // Paths
 const STORAGE_STATE_PATH = "/tmp/italki-storage-state.json";
-const SCREENSHOT_DIR = "/Users/USER/biz/.playwright-mcp";
+const SCREENSHOT_DIR = process.env.HOME + "/biz/.playwright-mcp";
 
 // italki URLs
 const ITALKI_LOGIN_URL = "https://www.italki.com/en/login";
