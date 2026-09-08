@@ -1,15 +1,86 @@
-/**
- * italki Budget Tracker
- *
- * Tracks monthly lesson spending against a configurable cap.
- * Data stored in JSON with atomic writes (temp file + rename).
- */
 
-import { existsSync, readFileSync, writeFileSync, mkdirSync, renameSync } from "fs";
-import { dirname } from "path";
+import {
+  chmodSync,
+  closeSync,
+  constants,
+  copyFileSync,
+  existsSync,
+  fsyncSync,
+  linkSync,
+  mkdirSync,
+  openSync,
+  readFileSync,
+  renameSync,
+  unlinkSync,
+  writeFileSync,
+} from "fs";
+import { randomUUID } from "node:crypto";
+import { homedir } from "os";
+import { dirname, join } from "path";
 import type { BudgetData, BudgetEntry, BudgetStatus } from "./types.js";
 
-const BUDGET_PATH = `${process.env.HOME}/.cache/italki-manager/budget.json`;
+export function resolveBudgetPaths(
+  env: NodeJS.ProcessEnv = process.env,
+  home = homedir(),
+): { path: string; legacyPath: string } {
+  const stateDirectory = env.ITALKI_STATE_DIR
+    || join(env.BIZ_ROOT || join(home, "biz"), "var", "italki-manager"); // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal
+  return {
+    // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal
+    path: join(stateDirectory, "budget.json"),
+    // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal
+    legacyPath: join(home, ".cache", "italki-manager", "budget.json"),
+  };
+}
+
+const BUDGET_PATHS = resolveBudgetPaths();
+
+type BudgetPaths = ReturnType<typeof resolveBudgetPaths>;
+
+export function migrateLegacyBudget(paths: BudgetPaths = BUDGET_PATHS): void {
+  if (existsSync(paths.path) || !existsSync(paths.legacyPath)) return;
+  const directory = dirname(paths.path);
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+  chmodSync(directory, 0o700);
+  const temporaryPath = `${paths.path}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    copyFileSync(
+      paths.legacyPath,
+      temporaryPath,
+      constants.COPYFILE_EXCL,
+    );
+    chmodSync(temporaryPath, 0o600);
+    const data = JSON.parse(readFileSync(temporaryPath, "utf8")) as Partial<BudgetData>;
+    const validEntries = Array.isArray(data.entries) && data.entries.every((entry) => (
+      entry !== null
+      && typeof entry === "object"
+      && typeof entry.date === "string"
+      && typeof entry.teacherName === "string"
+      && Number.isFinite(entry.cost)
+      && typeof entry.lessonType === "string"
+    ));
+    if (!Number.isFinite(data.monthlyCap) || !validEntries) {
+      throw new TypeError("Legacy italki budget has an invalid schema");
+    }
+    const fileDescriptor = openSync(temporaryPath, "r");
+    try {
+      fsyncSync(fileDescriptor);
+    } finally {
+      closeSync(fileDescriptor);
+    }
+    try {
+      linkSync(temporaryPath, paths.path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+  } finally {
+    try {
+      unlinkSync(temporaryPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+}
 
 export class BudgetTracker {
   private data: BudgetData;
@@ -19,29 +90,29 @@ export class BudgetTracker {
   }
 
   private load(): BudgetData {
-    if (existsSync(BUDGET_PATH)) {
+    migrateLegacyBudget();
+    if (existsSync(BUDGET_PATHS.path)) {
       try {
-        return JSON.parse(readFileSync(BUDGET_PATH, "utf-8"));
+        return JSON.parse(readFileSync(BUDGET_PATHS.path, "utf-8"));
       } catch {
-        // Corrupted file — start fresh
       }
     }
     return { monthlyCap: 0, entries: [] };
   }
 
-  /**
-   * Atomic write: write to temp file, then rename.
-   * Prevents corruption if the process crashes mid-write.
-   */
   private save(): void {
-    const dir = dirname(BUDGET_PATH);
+    const dir = dirname(BUDGET_PATHS.path);
     if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
     }
+    chmodSync(dir, 0o700);
 
-    const tmpPath = `${BUDGET_PATH}.tmp`;
-    writeFileSync(tmpPath, JSON.stringify(this.data, null, 2));
-    renameSync(tmpPath, BUDGET_PATH);
+    const tmpPath = `${BUDGET_PATHS.path}.tmp`;
+    writeFileSync(tmpPath, JSON.stringify(this.data, null, 2), {
+      encoding: "utf8",
+      mode: 0o600,
+    });
+    renameSync(tmpPath, BUDGET_PATHS.path);
   }
 
   setMonthlyCap(amount: number): void {
@@ -72,3 +143,4 @@ export class BudgetTracker {
     };
   }
 }
+

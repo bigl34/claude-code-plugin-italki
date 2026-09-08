@@ -1,5 +1,6 @@
 {
   "name": "italki-manager",
-  "version": "1.3.0",
-  "description": "italki Mandarin Chinese teacher search, indexing, and lesson booking via hybrid HTTP API + browser automation"
+  "version": "1.3.1",
+  "description": "italki Mandarin Chinese teacher search, indexing, and lesson booking via hybrid HTTP API + browser automation",
+  "repository": "https://github.com/bigl34/claude-code-plugin-italki"
 }

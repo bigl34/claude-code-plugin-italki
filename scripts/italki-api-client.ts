@@ -1,31 +1,15 @@
-/**
- * italki HTTP API Client
- *
- * Fetches teacher data from italki's unauthenticated REST API.
- * No browser needed — uses native fetch() with:
- * - Jittered delays (350-650ms) between requests
- * - Exponential backoff with jitter on errors
- * - Retry-After header respect for 429s
- * - Zod runtime validation to detect API schema changes
- *
- * API endpoint: POST https://api.italki.com/api/v2/teachers
- *
- * WARNING: This is an undocumented internal API. It may change without notice.
- * Zod validation ensures we fail fast with a clear error if that happens.
- */
 
 import { ApiTeacherSchema, ApiTeacherListSchema, type ApiTeacher } from "./types.js";
 import { ZodError } from "zod";
+import { withRetry } from "./vendor/retry/index.js";
 
 const API_BASE = "https://api.italki.com/api/v2";
 const TEACHERS_PER_PAGE = 20;
 const DEFAULT_MAX_PAGES = 10;
 
-// Jittered delay range (ms)
 const MIN_DELAY = 350;
 const MAX_DELAY = 650;
 
-// Backoff settings
 const MAX_RETRIES = 3;
 const BASE_BACKOFF_MS = 1000;
 
@@ -37,22 +21,24 @@ export interface IndexProgress {
 
 export type ProgressCallback = (progress: IndexProgress) => void;
 
-/**
- * Sleep for a random duration between min and max ms (jittered).
- */
 function jitteredDelay(min = MIN_DELAY, max = MAX_DELAY): Promise<void> {
   const ms = min + Math.random() * (max - min);
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-/**
- * Exponential backoff with jitter.
- * Base * 2^attempt + random jitter.
- */
-function backoffDelay(attempt: number): Promise<void> {
-  const base = BASE_BACKOFF_MS * Math.pow(2, attempt);
-  const jitter = Math.random() * BASE_BACKOFF_MS;
-  return new Promise((resolve) => setTimeout(resolve, base + jitter));
+type ItalkiRetryError = Error & {
+  status?: number;
+  retryAfterMs?: number;
+};
+
+function getErrorStatus(error: unknown): number | undefined {
+  const status = (error as { status?: unknown } | null | undefined)?.status;
+  return typeof status === "number" ? status : undefined;
+}
+
+function getRetryAfterMs(error: unknown): number | undefined {
+  const retryAfterMs = (error as { retryAfterMs?: unknown } | null | undefined)?.retryAfterMs;
+  return typeof retryAfterMs === "number" ? retryAfterMs : undefined;
 }
 
 export class ItalkiApiClient {
@@ -62,15 +48,17 @@ export class ItalkiApiClient {
     this.language = language;
   }
 
-  /**
-   * Fetch a single page of teachers from the API.
-   * Handles retries with exponential backoff.
-   */
+  private sleep(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
   private async fetchPage(page: number): Promise<ApiTeacher[]> {
     const url = `${API_BASE}/teachers`;
+    let attemptIndex = 0;
 
-    for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
-      try {
+    const result = await withRetry(
+      async () => {
+        const attempt = attemptIndex++;
         const response = await fetch(url, {
           method: "POST",
           headers: {
@@ -86,21 +74,19 @@ export class ItalkiApiClient {
           }),
         });
 
-        // Handle rate limiting
         if (response.status === 429) {
           const retryAfter = response.headers.get("Retry-After");
           const waitMs = retryAfter ? parseInt(retryAfter, 10) * 1000 : BASE_BACKOFF_MS * Math.pow(2, attempt);
-          await new Promise((resolve) => setTimeout(resolve, waitMs));
-          continue;
+          const error = new Error(`Rate limited: ${response.status} ${response.statusText}`) as ItalkiRetryError;
+          error.status = response.status;
+          error.retryAfterMs = waitMs;
+          throw error;
         }
 
-        // Handle server errors with backoff
         if (response.status >= 500) {
-          if (attempt < MAX_RETRIES) {
-            await backoffDelay(attempt);
-            continue;
-          }
-          throw new Error(`Server error ${response.status} after ${MAX_RETRIES + 1} attempts`);
+          const error = new Error(`Server error ${response.status} after ${MAX_RETRIES + 1} attempts`) as ItalkiRetryError;
+          error.status = response.status;
+          throw error;
         }
 
         if (!response.ok) {
@@ -109,7 +95,6 @@ export class ItalkiApiClient {
 
         const json = await response.json();
 
-        // Runtime schema validation — fail fast if API changed
         try {
           const validated = ApiTeacherListSchema.parse(json);
           return validated.data;
@@ -121,26 +106,43 @@ export class ItalkiApiClient {
           }
           throw zodError;
         }
-      } catch (error) {
-        if (attempt < MAX_RETRIES && error instanceof TypeError) {
-          // Network error — retry with backoff
-          await backoffDelay(attempt);
-          continue;
-        }
-        throw error;
+      },
+      {
+        maxRetries: MAX_RETRIES,
+        baseDelayMs: BASE_BACKOFF_MS,
+        maxDelayMs: Number.MAX_SAFE_INTEGER,
+        jitterPercent: 0,
+        retryableErrors: [],
+        nextDelayMs: ({ attempt, error }) => {
+          const retryAfterMs = getRetryAfterMs(error);
+          if (typeof retryAfterMs === "number") return retryAfterMs;
+          return BASE_BACKOFF_MS * Math.pow(2, attempt) + Math.random() * BASE_BACKOFF_MS;
+        },
+        shouldRetry: (error) => {
+          if (error instanceof TypeError) return true;
+          const status = getErrorStatus(error);
+          return status === 429 || (typeof status === "number" && status >= 500);
+        },
+        sleepImpl: (ms) => this.sleep(ms),
+        logger: () => {},
       }
+    );
+
+    if (result.success) {
+      return result.data as ApiTeacher[];
     }
 
-    throw new Error(`Failed to fetch page ${page} after ${MAX_RETRIES + 1} attempts`);
+    if (getErrorStatus(result.error) === 429) {
+      const retryAfterMs = getRetryAfterMs(result.error);
+      if (typeof retryAfterMs === "number") {
+        await this.sleep(retryAfterMs);
+      }
+      throw new Error(`Failed to fetch page ${page} after ${MAX_RETRIES + 1} attempts`);
+    }
+
+    throw result.error ?? new Error(`Failed to fetch page ${page} after ${MAX_RETRIES + 1} attempts`);
   }
 
-  /**
-   * Fetch all teachers across multiple pages.
-   *
-   * @param maxPages - Maximum pages to fetch (default 10 = ~200 teachers)
-   * @param onProgress - Optional callback for progress updates
-   * @returns Array of teacher records
-   */
   async fetchAllTeachers(
     maxPages: number = DEFAULT_MAX_PAGES,
     onProgress?: ProgressCallback
@@ -151,7 +153,6 @@ export class ItalkiApiClient {
       const teachers = await this.fetchPage(page);
 
       if (teachers.length === 0) {
-        // No more results
         break;
       }
 
@@ -163,12 +164,10 @@ export class ItalkiApiClient {
         teachersFetched: allTeachers.length,
       });
 
-      // Jittered delay between requests (not after the last one)
       if (page < maxPages && teachers.length === TEACHERS_PER_PAGE) {
         await jitteredDelay();
       }
 
-      // If we got fewer than a full page, there are no more
       if (teachers.length < TEACHERS_PER_PAGE) {
         break;
       }

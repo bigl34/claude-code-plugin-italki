@@ -1,39 +1,99 @@
-/**
- * italki Teacher Database
- *
- * SQLite storage for the local teacher index using better-sqlite3.
- * Features:
- * - Efficient upsert with transaction batching
- * - Computed scores: value_score, hidden_gem_score
- * - Dynamic search with WHERE/ORDER BY from filter objects
- * - WAL mode for concurrent read safety
- * - Pruning of stale records
- */
 
 import Database from "better-sqlite3";
-import { existsSync, mkdirSync } from "fs";
-import { dirname } from "path";
+import { randomUUID } from "node:crypto";
+import { chmodSync, existsSync, linkSync, mkdirSync, unlinkSync } from "fs";
+import { homedir } from "os";
+import { dirname, join } from "path";
 import type { Teacher, TeacherFilter, IndexStats, ApiTeacher } from "./types.js";
 
-const DB_PATH = `${process.env.HOME}/.cache/italki-manager/teachers.db`;
+export function resolveTeacherDbPaths(
+  env: NodeJS.ProcessEnv = process.env,
+  home = homedir(),
+): { path: string; legacyPath: string } {
+  const stateDirectory = env.ITALKI_STATE_DIR
+    || join(env.BIZ_ROOT || join(home, "biz"), "var", "italki-manager"); // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal
+  return {
+    // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal
+    path: join(stateDirectory, "teachers.db"),
+    // nosemgrep: javascript.lang.security.audit.path-traversal.path-join-resolve-traversal.path-join-resolve-traversal
+    legacyPath: join(home, ".cache", "italki-manager", "teachers.db"),
+  };
+}
+
+function migrateLegacyDatabase(path: string, legacyPath: string): void {
+  if (existsSync(path) || !existsSync(legacyPath)) return;
+  mkdirSync(dirname(path), { recursive: true, mode: 0o700 });
+  const temporaryPath = `${path}.${process.pid}.${randomUUID()}.tmp`;
+  const legacy = new Database(legacyPath, { readonly: true, fileMustExist: true });
+  try {
+    const quotedPath = temporaryPath.replaceAll("'", "''");
+    legacy.exec(`VACUUM INTO '${quotedPath}'`);
+    chmodSync(temporaryPath, 0o600);
+    try {
+      linkSync(temporaryPath, path);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "EEXIST") throw error;
+    }
+  } finally {
+    legacy.close();
+    try {
+      unlinkSync(temporaryPath);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+    }
+  }
+}
+
+function defaultDbPath(): string {
+  const paths = resolveTeacherDbPaths();
+  migrateLegacyDatabase(paths.path, paths.legacyPath);
+  return paths.path;
+}
 
 export class TeacherDB {
   private db: Database.Database;
 
-  constructor() {
-    // Ensure directory exists
-    const dir = dirname(DB_PATH);
-    if (!existsSync(dir)) {
-      mkdirSync(dir, { recursive: true });
+  constructor(dbPath?: string) {
+    const managedPath = dbPath === undefined;
+    const resolvedPath = dbPath ?? defaultDbPath();
+    if (resolvedPath !== ":memory:") {
+      const dir = dirname(resolvedPath);
+      if (!existsSync(dir)) {
+        mkdirSync(dir, { recursive: true, mode: managedPath ? 0o700 : undefined });
+      }
+      if (managedPath) chmodSync(dir, 0o700);
     }
 
-    this.db = new Database(DB_PATH);
+    this.db = new Database(resolvedPath);
+    try {
+      if (managedPath) chmodSync(resolvedPath, 0o600);
 
-    // WAL mode for concurrent read safety
-    this.db.pragma("journal_mode = WAL");
-    this.db.pragma("foreign_keys = ON");
+      const busyTimeoutMs = 5_000;
+      const walDeadline = Date.now() + busyTimeoutMs;
+      const waitCell = new Int32Array(new SharedArrayBuffer(4));
+      this.db.pragma(`busy_timeout = ${busyTimeoutMs}`);
+      while (true) {
+        try {
+          this.db.pragma("journal_mode = WAL");
+          break;
+        } catch (error) {
+          const remainingMs = walDeadline - Date.now();
+          if ((error as { code?: string }).code !== "SQLITE_BUSY" || remainingMs <= 0) {
+            throw error;
+          }
+          Atomics.wait(waitCell, 0, 0, Math.min(25, remainingMs));
+        }
+      }
+      this.db.pragma("foreign_keys = ON");
 
-    this.initSchema();
+      this.initSchema();
+    } catch (error) {
+      try {
+        this.db.close();
+      } catch {
+      }
+      throw error;
+    }
   }
 
   private initSchema(): void {
@@ -64,10 +124,6 @@ export class TeacherDB {
       CREATE INDEX IF NOT EXISTS idx_last_seen_at ON teachers(last_seen_at);
     `);
 
-    // Migrate: add new columns if they don't exist yet
-    const columns = this.db.pragma("table_info('teachers')") as Array<{ name: string }>;
-    const existingCols = new Set(columns.map(c => c.name));
-
     const newCols: [string, string][] = [
       ["price_30m", "REAL"],
       ["price_45m", "REAL"],
@@ -82,11 +138,16 @@ export class TeacherDB {
       ["course_detail_json", "TEXT"],
     ];
 
-    for (const [colName, colType] of newCols) {
-      if (!existingCols.has(colName)) {
-        this.db.prepare(`ALTER TABLE teachers ADD COLUMN ${colName} ${colType}`).run();
+    const migrateColumns = this.db.transaction(() => {
+      const columns = this.db.pragma("table_info('teachers')") as Array<{ name: string }>;
+      const existingCols = new Set(columns.map(c => c.name));
+      for (const [colName, colType] of newCols) {
+        if (!existingCols.has(colName)) {
+          this.db.prepare(`ALTER TABLE teachers ADD COLUMN ${colName} ${colType}`).run();
+        }
       }
-    }
+    });
+    migrateColumns.immediate();
 
     this.db.exec(`
       CREATE INDEX IF NOT EXISTS idx_price_30m ON teachers(price_30m ASC);
@@ -94,10 +155,6 @@ export class TeacherDB {
     `);
   }
 
-  /**
-   * Extract cheapest per-session price for each duration from pro_course_detail.
-   * Returns prices in USD (converted from cents) and a normalized hourly rate.
-   */
   private extractPrices(courseDetails: Array<{ price_list: Array<{
     session_price: number; session_length: number;
     package_length: number; package_price: number;
@@ -106,7 +163,6 @@ export class TeacherDB {
     price_60m: number | null; price_90m: number | null;
     hourly_rate: number | null;
   } {
-    // Map: session_length code → cheapest session_price (cents)
     const mins: Record<number, number> = {};
 
     for (const course of courseDetails) {
@@ -127,7 +183,6 @@ export class TeacherDB {
       price_90m: toDollars(mins[6]),
     };
 
-    // Compute hourly_rate from first available duration (priority: 30m, 45m, 60m, 90m)
     const durationMins = [
       { price: prices.price_30m, mins: 30 },
       { price: prices.price_45m, mins: 45 },
@@ -140,30 +195,15 @@ export class TeacherDB {
     return { ...prices, hourly_rate };
   }
 
-  /**
-   * Compute value_score: sessions per dollar spent.
-   * Higher = more experienced per unit cost.
-   */
   private computeValueScore(sessionCount: number, lessonPrice: number): number {
     if (lessonPrice <= 0) return 0;
     return parseFloat((sessionCount / lessonPrice).toFixed(2));
   }
 
-  /**
-   * Compute hidden_gem_score: high rating but low visibility.
-   * Formula: rating * (1 / log2(session_count + 2))
-   * Teachers with high ratings but few sessions score highest.
-   */
   private computeHiddenGemScore(rating: number, sessionCount: number): number {
     return parseFloat((rating * (1 / Math.log2(sessionCount + 2))).toFixed(4));
   }
 
-  /**
-   * Upsert a batch of API teachers into the database.
-   * Uses a transaction for atomicity and performance.
-   *
-   * @returns Number of teachers upserted
-   */
   upsertBatch(apiTeachers: ApiTeacher[]): number {
     const now = new Date().toISOString();
 
@@ -190,30 +230,28 @@ export class TeacherDB {
       for (const t of teachers) {
         const userId = t.user_info.user_id;
         const sessionCount = t.teacher_info?.session_count ?? 0;
-        // API returns rating as string (e.g. "4.9")
         const rating = parseFloat(t.teacher_info?.overall_rating ?? "0") || 0;
-        // Prices are in course_info, in cents — convert to dollars
         const lessonPriceCents = t.course_info?.min_price ?? 0;
         const trialPriceCents = t.course_info?.trial_price ?? 0;
         const trialPrice = trialPriceCents / 100;
 
-        // Extract per-duration pricing from pro_course_detail
         const prices = this.extractPrices(t.pro_course_detail || []);
-        // Use 30m price if available, fall back to min_price for backward compat
-        const lessonPrice = prices.price_30m ?? lessonPriceCents / 100;
+        const standardLessonPrice =
+          prices.price_30m ??
+          prices.price_45m ??
+          prices.price_60m ??
+          prices.price_90m;
+        const lessonPrice = standardLessonPrice ?? lessonPriceCents / 100;
 
-        // Teacher quality metrics (use ?? to preserve 0 as a valid value)
         const stats = t.teacher_statistics;
         const responseRate = stats?.response_rate ?? null;
         const attendanceRate = stats?.attendance_rate ?? null;
         const studentCount = t.teacher_info?.student_count ?? null;
         const timezone = t.user_info.timezone || null;
 
-        // Trial length: API returns in 15-min units, convert to minutes
         const trialLengthUnits = t.course_info?.trial_length ?? 0;
         const trialLength = trialLengthUnits > 0 ? trialLengthUnits * 15 : null;
 
-        // Store raw course detail for future use
         const courseDetailJson = t.pro_course_detail?.length
           ? JSON.stringify(t.pro_course_detail)
           : null;
@@ -254,9 +292,6 @@ export class TeacherDB {
     return upsertAll(apiTeachers);
   }
 
-  /**
-   * Search teachers with dynamic filtering and sorting.
-   */
   search(filter: TeacherFilter = {}): Teacher[] {
     const conditions: string[] = [];
     const params: Record<string, unknown> = {};
@@ -278,7 +313,6 @@ export class TeacherDB {
       params.isPro = filter.isPro ? 1 : 0;
     }
 
-    // Sorting — uses a whitelist to prevent SQL injection
     const sortMap: Record<string, string> = {
       value: "value_score DESC",
       session_count: "session_count DESC",
@@ -304,18 +338,12 @@ export class TeacherDB {
     })) as unknown as Teacher[];
   }
 
-  /**
-   * Get a single teacher by ID.
-   */
   getById(id: number): Teacher | null {
     const row = this.db.prepare("SELECT * FROM teachers WHERE id = ?").get(id) as Record<string, unknown> | undefined;
     if (!row) return null;
     return { ...row, is_pro: Boolean(row.is_pro) } as unknown as Teacher;
   }
 
-  /**
-   * Get index statistics.
-   */
   getStats(): IndexStats {
     const countRow = this.db.prepare("SELECT COUNT(*) as count FROM teachers").get() as { count: number };
     const statsRow = this.db.prepare(`
@@ -343,11 +371,6 @@ export class TeacherDB {
     };
   }
 
-  /**
-   * Remove teachers not seen in recent indexes.
-   * @param olderThanDays - Remove records older than this many days
-   * @returns Number of records pruned
-   */
   prune(olderThanDays: number = 30): number {
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - olderThanDays);
@@ -355,17 +378,11 @@ export class TeacherDB {
     return result.changes;
   }
 
-  /**
-   * Check if the database has any data.
-   */
   isEmpty(): boolean {
     const row = this.db.prepare("SELECT COUNT(*) as count FROM teachers").get() as { count: number };
     return row.count === 0;
   }
 
-  /**
-   * Close the database connection.
-   */
   close(): void {
     this.db.close();
   }

@@ -1,32 +1,48 @@
-/**
- * italki Browser Client
- *
- * Playwright automation for authenticated italki actions:
- * - Login with session persistence (storageState)
- * - Check teacher availability
- * - Book lessons (two-stage: preview → confirm)
- * - List upcoming/past lessons
- *
- * Uses playwright-extra with stealth plugin for bot evasion.
- * Payment is ALWAYS manual — screenshot payment page for user.
- */
 
 import { chromium } from "playwright-extra";
 import StealthPlugin from "puppeteer-extra-plugin-stealth";
 import { Browser, Page, BrowserContext } from "playwright";
 import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from "fs";
+import { secureStatePath } from "./vendor/secure-state/index.js";
 import type { ItalkiConfig, SessionInfo } from "./types.js";
 
-// Stealth plugin
 chromium.use(StealthPlugin());
 
-// Paths
-const STORAGE_STATE_PATH = "/tmp/italki-storage-state.json";
+const STORAGE_STATE_PATH = secureStatePath("italki", "storage-state.json");
 const SCREENSHOT_DIR = process.env.HOME + "/biz/.playwright-mcp";
 
-// italki URLs
 const ITALKI_LOGIN_URL = "https://www.italki.com/en/login";
 const ITALKI_DASHBOARD_URL = "https://www.italki.com/en/dashboard";
+
+interface BookingSlotProofOptions {
+  date?: string;
+  time?: string;
+  duration?: number;
+  dryRun?: boolean;
+}
+
+interface BookingSlotProof {
+  dateSelected: boolean;
+  timeSelected: boolean;
+  durationSelected?: boolean;
+}
+
+export function actualBookingSlotProofError(
+  options: BookingSlotProofOptions,
+  proof: BookingSlotProof,
+): string | null {
+  if (options.dryRun !== false) return null;
+  if (!options.date || !options.time) {
+    return "Actual booking requires a specific date and time before submitting.";
+  }
+  if (!proof.dateSelected || !proof.timeSelected) {
+    return `Requested slot ${options.date} ${options.time} was not selected; booking was not submitted.`;
+  }
+  if (options.duration && proof.durationSelected !== true) {
+    return `Requested duration ${options.duration} minutes was not selected; booking was not submitted.`;
+  }
+  return null;
+}
 
 export class ItalkiBrowserClient {
   private config: ItalkiConfig;
@@ -41,14 +57,10 @@ export class ItalkiBrowserClient {
     }
   }
 
-  // ============================================
-  // Browser Management
-  // ============================================
 
   private async ensureBrowser(): Promise<Page> {
     if (this.page) return this.page;
 
-    // Launch browser with stealth
     this.browser = await chromium.launch({
       headless: false,
       args: [
@@ -59,7 +71,6 @@ export class ItalkiBrowserClient {
       ],
     });
 
-    // Restore session if available
     const contextOptions: Record<string, unknown> = {
       viewport: { width: 1280, height: 800 },
     };
@@ -67,7 +78,6 @@ export class ItalkiBrowserClient {
       try {
         contextOptions.storageState = STORAGE_STATE_PATH;
       } catch {
-        // Invalid storage state — start fresh
       }
     }
 
@@ -82,7 +92,6 @@ export class ItalkiBrowserClient {
       try {
         await this.context.storageState({ path: STORAGE_STATE_PATH });
       } catch {
-        // Ignore save errors
       }
     }
   }
@@ -98,7 +107,6 @@ export class ItalkiBrowserClient {
   private async dismissCookieBanners(page: Page): Promise<void> {
     await page.waitForTimeout(2000);
 
-    // Try clicking common cookie accept buttons
     const selectors = [
       'button:has-text("Accept All")',
       'button:has-text("Accept")',
@@ -121,14 +129,56 @@ export class ItalkiBrowserClient {
     }
   }
 
-  // ============================================
-  // Login
-  // ============================================
+  private async hasVisiblePaymentControl(page: Page): Promise<boolean> {
+    const paymentSelectors = [
+      'button:has-text("Pay")',
+      'button:has-text("Checkout")',
+      '[class*="payment"]',
+      '[class*="checkout"]',
+      'iframe[src*="stripe"]',
+    ];
+    for (const selector of paymentSelectors) {
+      try {
+        const element = await page.$(selector);
+        if (element && await element.isVisible()) {
+          return true;
+        }
+      } catch {
+        continue;
+      }
+    }
+    return false;
+  }
+
+  private async hasSelectedDuration(page: Page, duration: number): Promise<boolean> {
+    return page.evaluate((requestedDuration) => {
+      const selectedSelectors = [
+        '[aria-selected="true"]',
+        '[aria-checked="true"]',
+        '[aria-pressed="true"]',
+        "input:checked",
+        ".selected",
+        '[class*="selected"]',
+        '[class*="active"]',
+      ];
+      const selectedElements = selectedSelectors.flatMap((selector) =>
+        Array.from(document.querySelectorAll(selector))
+      );
+
+      return selectedElements.some((element) => {
+        const inputValue = element instanceof HTMLInputElement ? element.value : "";
+        const labels = `${element.textContent ?? ""} ${inputValue}`.match(
+          /\b\d+\s*(?:min|mins|minute|minutes)\b/gi,
+        ) ?? [];
+        return labels.some((label) => Number.parseInt(label, 10) === requestedDuration);
+      });
+    }, duration);
+  }
+
 
   async login(): Promise<Record<string, unknown>> {
     const page = await this.ensureBrowser();
 
-    // Check if already logged in by visiting dashboard
     try {
       await page.goto(ITALKI_DASHBOARD_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
       await page.waitForTimeout(3000);
@@ -143,17 +193,14 @@ export class ItalkiBrowserClient {
         };
       }
     } catch {
-      // Not logged in — proceed to login
     }
 
-    // Navigate to login page
     await page.goto(ITALKI_LOGIN_URL, { waitUntil: "domcontentloaded", timeout: 30000 });
     await page.waitForTimeout(3000);
     await this.dismissCookieBanners(page);
 
     const loginScreenshot = await this.screenshot("login-page");
 
-    // Find and fill email field
     const emailSelectors = [
       'input[type="email"]',
       'input[name="email"]',
@@ -182,7 +229,6 @@ export class ItalkiBrowserClient {
 
     await emailField.fill(this.config.italki.email);
 
-    // Find and fill password field
     const passwordSelectors = [
       'input[type="password"]',
       'input[name="password"]',
@@ -210,7 +256,6 @@ export class ItalkiBrowserClient {
 
     await passwordField.fill(this.config.italki.password);
 
-    // Click login button
     const loginButtonSelectors = [
       'button[type="submit"]',
       'button:has-text("Log in")',
@@ -230,7 +275,6 @@ export class ItalkiBrowserClient {
       }
     }
 
-    // Wait for login result
     try {
       await page.waitForURL(/dashboard|student/i, { timeout: 30000 });
       await page.waitForTimeout(2000);
@@ -243,7 +287,6 @@ export class ItalkiBrowserClient {
         screenshot: await this.screenshot("logged-in"),
       };
     } catch {
-      // Check for CAPTCHA
       const pageContent = await page.content();
       if (pageContent.includes("captcha") || pageContent.includes("recaptcha") || pageContent.includes("hCaptcha")) {
         const captchaScreenshot = await this.screenshot("captcha");
@@ -264,14 +307,10 @@ export class ItalkiBrowserClient {
     }
   }
 
-  // ============================================
-  // Availability
-  // ============================================
 
   async checkAvailability(teacherId: number): Promise<Record<string, unknown>> {
     const page = await this.ensureBrowser();
 
-    // Ensure logged in
     const loginResult = await this.login();
     if ((loginResult as Record<string, unknown>).error) {
       return loginResult;
@@ -283,7 +322,6 @@ export class ItalkiBrowserClient {
 
     const screenshotPath = await this.screenshot("availability");
 
-    // Try to extract available slots from the page
     try {
       const slots = await page.evaluate(() => {
         const slotElements = document.querySelectorAll('[class*="time-slot"], [class*="available"], [data-time]');
@@ -325,9 +363,6 @@ export class ItalkiBrowserClient {
     }
   }
 
-  // ============================================
-  // Booking
-  // ============================================
 
   async bookLesson(options: {
     teacherId: number;
@@ -338,20 +373,17 @@ export class ItalkiBrowserClient {
     dryRun?: boolean;
   }): Promise<Record<string, unknown>> {
     const page = await this.ensureBrowser();
-    const dryRun = options.dryRun !== false; // Default true
+    const dryRun = options.dryRun !== false;
 
-    // Ensure logged in
     const loginResult = await this.login();
     if ((loginResult as Record<string, unknown>).error) {
       return loginResult;
     }
 
-    // Navigate to teacher's booking page
     const teacherUrl = `https://www.italki.com/en/teacher/${options.teacherId}`;
     await page.goto(teacherUrl, { waitUntil: "domcontentloaded", timeout: 30000 });
     await page.waitForTimeout(3000);
 
-    // Look for "Book lesson" or "Book trial" button
     const buttonText = options.lessonType === "trial" ? "trial" : "lesson";
     const bookButtonSelectors = [
       `button:has-text("Book ${buttonText}")`,
@@ -385,10 +417,12 @@ export class ItalkiBrowserClient {
       };
     }
 
-    // Select date if provided
+    let dateSelected = false;
+    let timeSelected = false;
+    let durationSelected = options.duration === undefined;
+
     if (options.date) {
       try {
-        // Look for date picker and select the date
         const dateElements = await page.$$('[class*="calendar"] [class*="day"], [class*="date-picker"] button');
         const dayNum = new Date(options.date).getDate();
         for (const el of dateElements) {
@@ -396,15 +430,14 @@ export class ItalkiBrowserClient {
           if (text?.trim() === String(dayNum)) {
             await el.click();
             await page.waitForTimeout(1000);
+            dateSelected = true;
             break;
           }
         }
       } catch {
-        // Date selection failed — continue, user can see in screenshot
       }
     }
 
-    // Select time if provided
     if (options.time) {
       try {
         const timeSlots = await page.$$('[class*="time-slot"], [class*="slot"]');
@@ -413,23 +446,28 @@ export class ItalkiBrowserClient {
           if (text?.includes(options.time)) {
             await slot.click();
             await page.waitForTimeout(1000);
+            timeSelected = true;
             break;
           }
         }
       } catch {
-        // Time selection failed
       }
     }
 
-    // Take preview screenshot (Stage 1)
+    if (options.duration) {
+      try {
+        durationSelected = await this.hasSelectedDuration(page, options.duration);
+      } catch {
+        durationSelected = false;
+      }
+    }
+
     const previewScreenshot = await this.screenshot("booking-preview");
 
-    // Determine booking type from page
     const pageContent = await page.content();
     const isInstant = pageContent.toLowerCase().includes("instant") && !pageContent.toLowerCase().includes("request");
     const bookingType = isInstant ? "instant" : "request";
 
-    // Extract cost from page if visible
     let cost = 0;
     try {
       const costText = await page.evaluate(() => {
@@ -439,7 +477,6 @@ export class ItalkiBrowserClient {
       const costMatch = costText.match(/[\$]?([\d.]+)/);
       if (costMatch) cost = parseFloat(costMatch[1]);
     } catch {
-      // Cost extraction failed
     }
 
     if (dryRun) {
@@ -450,6 +487,7 @@ export class ItalkiBrowserClient {
         lessonType: options.lessonType || "standard",
         date: options.date || "see screenshot",
         time: options.time || "see screenshot",
+        duration: options.duration || "see screenshot",
         bookingType,
         estimatedCost: cost > 0 ? `$${cost.toFixed(2)}` : "see screenshot",
         screenshot: previewScreenshot,
@@ -457,12 +495,44 @@ export class ItalkiBrowserClient {
       };
     }
 
-    // Stage 2: Actually submit
+    const slotProofError = actualBookingSlotProofError(options, {
+      dateSelected,
+      timeSelected,
+      durationSelected,
+    });
+    if (slotProofError) {
+      return {
+        success: false,
+        error: slotProofError,
+        teacherId: options.teacherId,
+        lessonType: options.lessonType || "standard",
+        date: options.date,
+        time: options.time,
+        duration: options.duration,
+        bookingType,
+        cost: cost > 0 ? cost : undefined,
+        screenshot: previewScreenshot,
+        message: "Booking was not submitted because the requested slot could not be verified.",
+      };
+    }
+
+    if (await this.hasVisiblePaymentControl(page)) {
+      const paymentScreenshot = await this.screenshot("payment-handoff-before-click");
+      return {
+        success: true,
+        paymentRequired: true,
+        teacherId: options.teacherId,
+        bookingType,
+        cost: cost > 0 ? cost : undefined,
+        screenshot: paymentScreenshot,
+        message: "Payment control detected before submission. Please complete payment manually in the visible browser window. DO NOT close the browser.",
+      };
+    }
+
     const confirmSelectors = [
       'button:has-text("Confirm")',
       'button:has-text("Book now")',
       'button:has-text("Submit")',
-      'button:has-text("Pay")',
       'button[type="submit"]',
     ];
 
@@ -481,7 +551,22 @@ export class ItalkiBrowserClient {
       }
     }
 
-    // Check if payment page appeared
+    if (!clicked) {
+      const missingSubmitScreenshot = await this.screenshot("booking-submit-missing");
+      return {
+        success: false,
+        error: "Could not find a confirmation control to submit the booking.",
+        teacherId: options.teacherId,
+        lessonType: options.lessonType || "standard",
+        date: options.date,
+        time: options.time,
+        bookingType,
+        cost: cost > 0 ? cost : undefined,
+        screenshot: missingSubmitScreenshot,
+        message: "Booking was not submitted because no confirmation control was visible.",
+      };
+    }
+
     const currentUrl = page.url();
     if (currentUrl.includes("pay") || currentUrl.includes("checkout")) {
       const paymentScreenshot = await this.screenshot("payment-page");
@@ -496,7 +581,6 @@ export class ItalkiBrowserClient {
       };
     }
 
-    // Take confirmation screenshot
     const confirmScreenshot = await this.screenshot("booking-confirmed");
 
     return {
@@ -514,9 +598,6 @@ export class ItalkiBrowserClient {
     };
   }
 
-  // ============================================
-  // List Lessons
-  // ============================================
 
   async listLessons(statusFilter?: string): Promise<Record<string, unknown>> {
     const page = await this.ensureBrowser();
@@ -526,7 +607,6 @@ export class ItalkiBrowserClient {
       return loginResult;
     }
 
-    // Navigate to lessons page
     await page.goto("https://www.italki.com/en/student/lessons", {
       waitUntil: "domcontentloaded",
       timeout: 30000,
@@ -535,7 +615,6 @@ export class ItalkiBrowserClient {
 
     const screenshotPath = await this.screenshot("lessons-list");
 
-    // Try to extract lesson info from page
     try {
       const lessons = await page.evaluate(() => {
         const lessonCards = document.querySelectorAll('[class*="lesson-card"], [class*="lesson-item"], [class*="session"]');
@@ -583,9 +662,6 @@ export class ItalkiBrowserClient {
     }
   }
 
-  // ============================================
-  // Session Management
-  // ============================================
 
   async reset(): Promise<Record<string, unknown>> {
     try {

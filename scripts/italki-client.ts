@@ -1,25 +1,11 @@
-/**
- * italki Manager - Coordinating Client
- *
- * Orchestrates HTTP API client, SQLite database, browser client,
- * and budget tracker. Lazy-initializes browser only when needed.
- *
- * This is the single client class instantiated by runCli().
- */
 
 import { existsSync, readFileSync, writeFileSync, appendFileSync, mkdirSync, readdirSync } from "fs";
-import { dirname, join } from "path";
-import { fileURLToPath } from "url";
+import { loadServiceConfig } from "@local/cli-utils";
 import { ItalkiApiClient } from "./italki-api-client.js";
 import { TeacherDB } from "./teacher-db.js";
 import { ItalkiBrowserClient } from "./italki-browser-client.js";
 import { BudgetTracker } from "./budget-tracker.js";
 import { ItalkiConfigSchema, type ItalkiConfig, type TeacherFilter, type Teacher, type IndexStats } from "./types.js";
-import { ZodError } from "zod";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = dirname(__filename);
-const CONFIG_PATH = join(__dirname, "..", "config.json");
 
 export class ItalkiClient {
   private config: ItalkiConfig;
@@ -36,35 +22,12 @@ export class ItalkiClient {
   }
 
   private loadConfig(): ItalkiConfig {
-    if (!existsSync(CONFIG_PATH)) {
-      throw new Error(
-        `Config file not found at ${CONFIG_PATH}. Run cred-loader-sync to generate credentials.`
-      );
-    }
-
-    let raw: unknown;
-    try {
-      raw = JSON.parse(readFileSync(CONFIG_PATH, "utf-8"));
-    } catch {
-      throw new Error(`Invalid JSON in config file at ${CONFIG_PATH}`);
-    }
-
-    try {
-      return ItalkiConfigSchema.parse(raw);
-    } catch (err) {
-      if (err instanceof ZodError) {
-        const issues = err.issues
-          .map((i) => `  - ${i.path.join(".")}: ${i.message}`)
-          .join("\n");
-        throw new Error(`Invalid italki config at ${CONFIG_PATH}:\n${issues}`);
-      }
-      throw err;
-    }
+    return loadServiceConfig("italki-manager", {
+      schema: ItalkiConfigSchema,
+      remedy: "Run cred-loader-sync to regenerate credentials.",
+    });
   }
 
-  /**
-   * Lazy-initialize the browser client (only when booking/login needed).
-   */
   private ensureBrowserClient(): ItalkiBrowserClient {
     if (!this.browserClient) {
       this.browserClient = new ItalkiBrowserClient(this.config);
@@ -72,18 +35,11 @@ export class ItalkiClient {
     return this.browserClient;
   }
 
-  // ============================================
-  // HTTP API + Database Operations
-  // ============================================
 
-  /**
-   * Index teachers from the italki API into the local SQLite database.
-   */
   async indexTeachers(maxPages: number = 10): Promise<Record<string, unknown>> {
     const startTime = Date.now();
 
     const teachers = await this.apiClient.fetchAllTeachers(maxPages, (progress) => {
-      // Progress is consumed by the CLI output
       process.stderr.write(
         `\rIndexing: page ${progress.page}/${progress.totalPages} (${progress.teachersFetched} teachers)`
       );
@@ -112,12 +68,7 @@ export class ItalkiClient {
     };
   }
 
-  /**
-   * Search teachers from the local database.
-   * Auto-indexes if the database is empty.
-   */
   async searchTeachers(filter: TeacherFilter, refresh: boolean = false): Promise<Record<string, unknown>> {
-    // Auto-index if empty or refresh requested
     if (this.db.isEmpty() || refresh) {
       await this.indexTeachers();
     }
@@ -151,9 +102,6 @@ export class ItalkiClient {
     };
   }
 
-  /**
-   * Get detailed profile for a single teacher.
-   */
   getTeacherProfile(id: number): Record<string, unknown> {
     const teacher = this.db.getById(id);
     if (!teacher) {
@@ -196,17 +144,11 @@ export class ItalkiClient {
     };
   }
 
-  /**
-   * Get index statistics.
-   */
   getIndexStats(): Record<string, unknown> {
     const stats = this.db.getStats();
     return { success: true, stats };
   }
 
-  // ============================================
-  // Browser Operations (lazy init)
-  // ============================================
 
   async login(): Promise<Record<string, unknown>> {
     const client = this.ensureBrowserClient();
@@ -229,7 +171,6 @@ export class ItalkiClient {
     const client = this.ensureBrowserClient();
     const result = await client.bookLesson(options);
 
-    // Track budget if booking was successful (not dry-run)
     if (result.success && !options.dryRun && result.cost) {
       const teacher = this.db.getById(options.teacherId);
       this.budgetTracker.addEntry({
@@ -239,7 +180,6 @@ export class ItalkiClient {
         lessonType: options.lessonType || "standard",
       });
 
-      // Check budget warning
       const status = this.budgetTracker.getStatus();
       if (status.overBudget) {
         (result as Record<string, unknown>).budgetWarning =
@@ -267,9 +207,6 @@ export class ItalkiClient {
     return { success: true, message: "No browser session to reset." };
   }
 
-  // ============================================
-  // Budget Operations
-  // ============================================
 
   setBudget(monthly: number): Record<string, unknown> {
     this.budgetTracker.setMonthlyCap(monthly);
@@ -280,9 +217,6 @@ export class ItalkiClient {
     return { success: true, ...this.budgetTracker.getStatus() };
   }
 
-  // ============================================
-  // Notes Operations
-  // ============================================
 
   addNote(teacherId: number, note: string, type: string = "general"): Record<string, unknown> {
     const teacher = this.db.getById(teacherId);

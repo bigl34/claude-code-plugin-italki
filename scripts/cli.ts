@@ -1,22 +1,11 @@
 #!/usr/bin/env npx tsx
-/**
- * italki Manager CLI
- *
- * Zod-validated CLI for italki teacher search, indexing, and lesson booking.
- *
- * Transport types:
- * - HTTP + DB: search-teachers, teacher-profile, index-teachers (no browser needed)
- * - Browser: login, check-availability, book-lesson, list-lessons, reset
- * - Local: budget, notes
- */
 
 import { z, createCommand, runCli, cliTypes } from "@local/cli-utils";
+import { realpathSync } from "node:fs";
+import { pathToFileURL } from "node:url";
 import { ItalkiClient } from "./italki-client.js";
 
-const commands = {
-  // ============================================
-  // HTTP + Database Commands
-  // ============================================
+export const commands = {
 
   "search-teachers": createCommand(
     z.object({
@@ -38,7 +27,8 @@ const commands = {
       };
       return client.searchTeachers(filter, refresh);
     },
-    "Search/filter teachers from local index (auto-indexes if empty, --refresh forces re-index)"
+    "Search/filter teachers from local index (auto-indexes if empty, --refresh forces re-index)",
+    { sideEffect: "read" }
   ),
 
   "teacher-profile": createCommand(
@@ -48,7 +38,8 @@ const commands = {
     async (args, client: ItalkiClient) => {
       return client.getTeacherProfile((args as { id: number }).id);
     },
-    "View detailed profile for a teacher from local index"
+    "View detailed profile for a teacher from local index",
+    { sideEffect: "read" }
   ),
 
   "index-teachers": createCommand(
@@ -58,17 +49,16 @@ const commands = {
     async (args, client: ItalkiClient) => {
       return client.indexTeachers((args as { maxPages?: number }).maxPages);
     },
-    "Fetch teachers from italki API and index locally (default: 10 pages = ~200 teachers)"
+    "Fetch teachers from italki API and index locally (default: 10 pages = ~200 teachers)",
+    { sideEffect: "write" }
   ),
 
-  // ============================================
-  // Browser Commands
-  // ============================================
 
   "login": createCommand(
     z.object({}),
     async (_args, client: ItalkiClient) => client.login(),
-    "Authenticate with italki (opens headed browser)"
+    "Authenticate with italki (opens headed browser)",
+    { sideEffect: "write" }
   ),
 
   "check-availability": createCommand(
@@ -78,7 +68,8 @@ const commands = {
     async (args, client: ItalkiClient) => {
       return client.checkAvailability((args as { teacherId: number }).teacherId);
     },
-    "View a teacher's available time slots"
+    "View a teacher's available time slots",
+    { sideEffect: "read" }
   ),
 
   "book-lesson": createCommand(
@@ -99,9 +90,13 @@ const commands = {
         lessonType?: "standard" | "trial";
         dryRun?: boolean;
       };
+      if (opts.dryRun === false && (!opts.date || !opts.time)) {
+        throw new Error("Actual italki booking requires both --date YYYY-MM-DD and --time HH:MM");
+      }
       return client.bookLesson(opts);
     },
-    "Book a lesson (--dry-run for preview only, default). Omit --dry-run=false to submit."
+    "Book a lesson (--dry-run for preview only, default). Omit --dry-run=false to submit.",
+    { sideEffect: "external_send", requiresConfirmation: true, dryRunSupported: true }
   ),
 
   "list-lessons": createCommand(
@@ -111,18 +106,17 @@ const commands = {
     async (args, client: ItalkiClient) => {
       return client.listLessons((args as { status?: string }).status);
     },
-    "View upcoming/past lessons"
+    "View upcoming/past lessons",
+    { sideEffect: "read" }
   ),
 
   "reset": createCommand(
     z.object({}),
     async (_args, client: ItalkiClient) => client.reset(),
-    "Close browser and clear session"
+    "Close browser and clear session",
+    { sideEffect: "destructive" }
   ),
 
-  // ============================================
-  // Local Commands
-  // ============================================
 
   "budget": createCommand(
     z.object({
@@ -135,7 +129,8 @@ const commands = {
       }
       return client.getBudgetStatus();
     },
-    "View or set monthly lesson budget (--monthly N to set)"
+    "View or set monthly lesson budget (--monthly N to set)",
+    { sideEffect: "write" }
   ),
 
   "notes": createCommand(
@@ -155,11 +150,23 @@ const commands = {
       }
       return client.getNotes(teacherId);
     },
-    "Add or view lesson notes for a teacher (--add '...' to add)"
+    "Add or view lesson notes for a teacher (--add '...' to add)",
+    { sideEffect: "write" }
   ),
 };
 
-runCli(commands, ItalkiClient, {
-  programName: "italki-cli",
-  description: "italki teacher search, indexing, and lesson booking",
-});
+let isCliEntry = false;
+try {
+  isCliEntry =
+    process.argv[1] !== undefined &&
+    import.meta.url === pathToFileURL(realpathSync(process.argv[1])).href;
+} catch {
+  isCliEntry = false;
+}
+
+if (isCliEntry) {
+  runCli(commands, ItalkiClient, {
+    programName: "italki-cli",
+    description: "italki teacher search, indexing, and lesson booking",
+  });
+}
