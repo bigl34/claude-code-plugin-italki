@@ -12,7 +12,7 @@
     "@local/cli-utils": "github:bigl34/claude-code-plugin-shared",
     "@local/plugin-cache": "github:bigl34/claude-code-plugin-cache",
     "better-sqlite3": "^13.0.1",
-    "playwright": "^1.58.1",
+    "playwright": "^1.63.0",
     "playwright-extra": "^4.3.6",
     "puppeteer-extra-plugin-stealth": "^2.11.2",
     "zod": "^3.23.0"

@@ -1,7 +1,6 @@
 ---
 name: italki-manager
 description: Use this agent for italki Mandarin Chinese learning — search teachers, index locally, check availability, book lessons, track budget, and manage lesson notes. Hybrid HTTP API + browser automation.
-model: claude-opus-4-6
 color: success
 mode: subagent
 ---
