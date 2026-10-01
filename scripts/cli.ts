@@ -17,14 +17,7 @@ export const commands = {
       refresh: z.preprocess((v) => v === true || v === "true", z.boolean()).optional().describe("Force re-index before searching"),
     }),
     async (args, client: ItalkiClient) => {
-      const { refresh, ...filter } = args as {
-        sortBy?: "value" | "session_count" | "rating" | "hidden_gem" | "price_low" | "price_high" | "price_per_hour";
-        maxPrice?: number;
-        minRating?: number;
-        minSessions?: number;
-        limit?: number;
-        refresh?: boolean;
-      };
+      const { refresh, ...filter } = args;
       return client.searchTeachers(filter, refresh);
     },
     "Search/filter teachers from local index (auto-indexes if empty, --refresh forces re-index)",
@@ -36,7 +29,7 @@ export const commands = {
       id: cliTypes.int(1).describe("Teacher ID"),
     }),
     async (args, client: ItalkiClient) => {
-      return client.getTeacherProfile((args as { id: number }).id);
+      return client.getTeacherProfile(args.id);
     },
     "View detailed profile for a teacher from local index",
     { sideEffect: "read" }
@@ -47,7 +40,7 @@ export const commands = {
       maxPages: cliTypes.int(1, 500).optional().describe("Max pages to fetch (20 teachers/page, default: 10)"),
     }),
     async (args, client: ItalkiClient) => {
-      return client.indexTeachers((args as { maxPages?: number }).maxPages);
+      return client.indexTeachers(args.maxPages);
     },
     "Fetch teachers from italki API and index locally (default: 10 pages = ~200 teachers)",
     { sideEffect: "write" }
@@ -66,7 +59,7 @@ export const commands = {
       teacherId: cliTypes.int(1).describe("Teacher ID to check"),
     }),
     async (args, client: ItalkiClient) => {
-      return client.checkAvailability((args as { teacherId: number }).teacherId);
+      return client.checkAvailability(args.teacherId);
     },
     "View a teacher's available time slots",
     { sideEffect: "read" }
@@ -82,14 +75,7 @@ export const commands = {
       dryRun: z.preprocess((v) => v === undefined || v === true || v === "true", z.boolean()).optional().describe("Preview only, don't submit (default: true)"),
     }),
     async (args, client: ItalkiClient) => {
-      const opts = args as {
-        teacherId: number;
-        date?: string;
-        time?: string;
-        duration?: number;
-        lessonType?: "standard" | "trial";
-        dryRun?: boolean;
-      };
+      const opts = args;
       if (opts.dryRun === false && (!opts.date || !opts.time)) {
         throw new Error("Actual italki booking requires both --date YYYY-MM-DD and --time HH:MM");
       }
@@ -104,7 +90,7 @@ export const commands = {
       status: z.enum(["upcoming", "completed", "cancelled", "all"]).optional().describe("Filter by lesson status (default: all)"),
     }),
     async (args, client: ItalkiClient) => {
-      return client.listLessons((args as { status?: string }).status);
+      return client.listLessons(args.status);
     },
     "View upcoming/past lessons",
     { sideEffect: "read" }
@@ -123,7 +109,7 @@ export const commands = {
       monthly: cliTypes.float(0).optional().describe("Set monthly budget cap in USD (omit to view status)"),
     }),
     async (args, client: ItalkiClient) => {
-      const monthly = (args as { monthly?: number }).monthly;
+      const monthly = args.monthly;
       if (monthly !== undefined) {
         return client.setBudget(monthly);
       }
@@ -140,11 +126,7 @@ export const commands = {
       type: z.enum(["general", "vocabulary", "homework", "feedback", "characters", "pinyin", "tones"]).optional().describe("Note type (default: general)"),
     }),
     async (args, client: ItalkiClient) => {
-      const { teacherId, add, type } = args as {
-        teacherId: number;
-        add?: string;
-        type?: string;
-      };
+      const { teacherId, add, type } = args;
       if (add) {
         return client.addNote(teacherId, add, type || "general");
       }

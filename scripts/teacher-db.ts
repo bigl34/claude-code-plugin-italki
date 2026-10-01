@@ -167,7 +167,7 @@ export class TeacherDB {
 
     for (const course of courseDetails) {
       for (const p of course.price_list) {
-        if (p.session_price > 0 && [2, 3, 4, 6].includes(p.session_length)) {
+        if (Number.isFinite(p.session_price) && p.session_price > 0 && [2, 3, 4, 6].includes(p.session_length)) {
           if (!(p.session_length in mins) || p.session_price < mins[p.session_length]) {
             mins[p.session_length] = p.session_price;
           }
@@ -189,8 +189,10 @@ export class TeacherDB {
       { price: prices.price_60m, mins: 60 },
       { price: prices.price_90m, mins: 90 },
     ];
-    const cheapest = durationMins.find(d => d.price != null);
-    const hourly_rate = cheapest ? parseFloat(((cheapest.price! / cheapest.mins) * 60).toFixed(2)) : null;
+    const hourlyRates = durationMins.flatMap(({ price, mins }) =>
+      price != null ? [(price / mins) * 60] : []);
+    const hourly_rate = hourlyRates.length > 0
+      ? parseFloat(Math.min(...hourlyRates).toFixed(2)) : null;
 
     return { ...prices, hourly_rate };
   }

@@ -199,12 +199,9 @@ export class ItalkiClient {
   }
 
   async reset(): Promise<Record<string, unknown>> {
-    if (this.browserClient) {
-      const result = await this.browserClient.reset();
-      this.browserClient = null;
-      return result;
-    }
-    return { success: true, message: "No browser session to reset." };
+    const result = await this.ensureBrowserClient().reset();
+    this.browserClient = null;
+    return result;
   }
 
 

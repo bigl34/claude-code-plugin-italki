@@ -49,7 +49,7 @@ npm --prefix "$CLAUDE_PLUGIN_ROOT/scripts" run cli -- <command> [options]
 | `check-availability` | View a teacher's available time slots |
 | `book-lesson` | Book a lesson (preview by default) |
 | `list-lessons` | View upcoming/past lessons |
-| `reset` | Close browser and clear session |
+| `reset` | Clear saved login state and close any browser owned by this process |
 
 ### Local Commands
 
@@ -63,7 +63,7 @@ npm --prefix "$CLAUDE_PLUGIN_ROOT/scripts" run cli -- <command> [options]
 ### search-teachers
 
 ```bash
-node .../cli.js search-teachers [options]
+npm --prefix "$CLAUDE_PLUGIN_ROOT/scripts" run cli -- search-teachers [options]
 ```
 
 | Option | Description | Default |
@@ -80,13 +80,13 @@ node .../cli.js search-teachers [options]
 ### teacher-profile
 
 ```bash
-node .../cli.js teacher-profile --id <teacher_id>
+npm --prefix "$CLAUDE_PLUGIN_ROOT/scripts" run cli -- teacher-profile --id <teacher_id>
 ```
 
 ### index-teachers
 
 ```bash
-node .../cli.js index-teachers [--max-pages N]
+npm --prefix "$CLAUDE_PLUGIN_ROOT/scripts" run cli -- index-teachers [--max-pages N]
 ```
 
 Default: 10 pages (~200 teachers). Max: 500 pages (~10,000 teachers).
@@ -94,7 +94,7 @@ Default: 10 pages (~200 teachers). Max: 500 pages (~10,000 teachers).
 ### check-availability
 
 ```bash
-node .../cli.js check-availability --teacher-id <id>
+npm --prefix "$CLAUDE_PLUGIN_ROOT/scripts" run cli -- check-availability --teacher-id <id>
 ```
 
 Returns screenshot of teacher's schedule page.
@@ -102,7 +102,7 @@ Returns screenshot of teacher's schedule page.
 ### book-lesson
 
 ```bash
-node .../cli.js book-lesson --teacher-id <id> [options]
+npm --prefix "$CLAUDE_PLUGIN_ROOT/scripts" run cli -- book-lesson --teacher-id <id> [options]
 ```
 
 | Option | Description | Default |
@@ -118,23 +118,23 @@ node .../cli.js book-lesson --teacher-id <id> [options]
 ### list-lessons
 
 ```bash
-node .../cli.js list-lessons [--status upcoming|completed|cancelled|all]
+npm --prefix "$CLAUDE_PLUGIN_ROOT/scripts" run cli -- list-lessons [--status upcoming|completed|cancelled|all]
 ```
 
 ### budget
 
 ```bash
-node .../cli.js budget                  # View status
-node .../cli.js budget --monthly 100    # Set $100/month cap
+npm --prefix "$CLAUDE_PLUGIN_ROOT/scripts" run cli -- budget                  # View status
+npm --prefix "$CLAUDE_PLUGIN_ROOT/scripts" run cli -- budget --monthly 100    # Set $100/month cap
 ```
 
 ### notes
 
 ```bash
-node .../cli.js notes --teacher-id <id>                              # View notes
-node .../cli.js notes --teacher-id <id> --add "Great lesson today"   # Add note
-node .../cli.js notes --teacher-id <id> --add "你好 (nǐ hǎo) = hello" --type vocabulary
-node .../cli.js notes --teacher-id <id> --add "我 wǒ, 是 shì, 他 tā — tone 3-4-1 drill" --type tones
+npm --prefix "$CLAUDE_PLUGIN_ROOT/scripts" run cli -- notes --teacher-id <id>                              # View notes
+npm --prefix "$CLAUDE_PLUGIN_ROOT/scripts" run cli -- notes --teacher-id <id> --add "Great lesson today"   # Add note
+npm --prefix "$CLAUDE_PLUGIN_ROOT/scripts" run cli -- notes --teacher-id <id> --add "你好 (nǐ hǎo) = hello" --type vocabulary
+npm --prefix "$CLAUDE_PLUGIN_ROOT/scripts" run cli -- notes --teacher-id <id> --add "我 wǒ, 是 shì, 他 tā — tone 3-4-1 drill" --type tones
 ```
 
 Types: `general`, `vocabulary`, `homework`, `feedback`, `characters`, `pinyin`, `tones`
@@ -183,17 +183,17 @@ The `teacher-profile` command now shows additional quality data:
 
 1. **Index teachers** (auto on first search):
 ```bash
-node .../cli.js search-teachers --sort-by value --min-rating 4.5 --limit 10
+npm --prefix "$CLAUDE_PLUGIN_ROOT/scripts" run cli -- search-teachers --sort-by value --min-rating 4.5 --limit 10
 ```
 
 2. **Review top candidates:**
 ```bash
-node .../cli.js teacher-profile --id <teacher_id>
+npm --prefix "$CLAUDE_PLUGIN_ROOT/scripts" run cli -- teacher-profile --id <teacher_id>
 ```
 
 3. **Check availability:**
 ```bash
-node .../cli.js check-availability --teacher-id <id>
+npm --prefix "$CLAUDE_PLUGIN_ROOT/scripts" run cli -- check-availability --teacher-id <id>
 ```
 
 ### Book a Lesson (Two-Stage)
@@ -202,7 +202,7 @@ node .../cli.js check-availability --teacher-id <id>
 
 1. **Preview (dry run):**
 ```bash
-node .../cli.js book-lesson --teacher-id <id> --lesson-type trial --dry-run
+npm --prefix "$CLAUDE_PLUGIN_ROOT/scripts" run cli -- book-lesson --teacher-id <id> --lesson-type trial --dry-run
 ```
 
 2. **Show preview screenshot** using Read tool. Present summary to user.
@@ -211,7 +211,7 @@ node .../cli.js book-lesson --teacher-id <id> --lesson-type trial --dry-run
 
 4. **Submit booking:**
 ```bash
-node .../cli.js book-lesson --teacher-id <id> --lesson-type trial --dry-run=false
+npm --prefix "$CLAUDE_PLUGIN_ROOT/scripts" run cli -- book-lesson --teacher-id <id> --lesson-type trial --dry-run=false
 ```
 
 5. **If payment page appears:** Tell user to complete payment in the visible browser. Do NOT close browser.
@@ -227,15 +227,15 @@ Description: italki [lesson_type] Mandarin lesson with [teacher_name]. Cost: $[c
 
 7. **Cleanup:**
 ```bash
-node .../cli.js reset
+npm --prefix "$CLAUDE_PLUGIN_ROOT/scripts" run cli -- reset
 ```
 
 ### Post-Lesson Review
 
 ```bash
-node .../cli.js notes --teacher-id <id> --add "Covered tones and measure words. Homework: practice 了 vs 过." --type general
-node .../cli.js notes --teacher-id <id> --add "你好 (nǐ hǎo) = hello, 谢谢 (xiè xie) = thank you" --type vocabulary
-node .../cli.js notes --teacher-id <id> --add "我 wǒ, 是 shì, 他 tā — tone 3-4-1 drill" --type tones
+npm --prefix "$CLAUDE_PLUGIN_ROOT/scripts" run cli -- notes --teacher-id <id> --add "Covered tones and measure words. Homework: practice 了 vs 过." --type general
+npm --prefix "$CLAUDE_PLUGIN_ROOT/scripts" run cli -- notes --teacher-id <id> --add "你好 (nǐ hǎo) = hello, 谢谢 (xiè xie) = thank you" --type vocabulary
+npm --prefix "$CLAUDE_PLUGIN_ROOT/scripts" run cli -- notes --teacher-id <id> --add "我 wǒ, 是 shì, 他 tā — tone 3-4-1 drill" --type tones
 ```
 
 ## Mandarin-Specific Tips

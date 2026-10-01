@@ -3,7 +3,7 @@
 
 italki Mandarin Chinese teacher search, indexing, and lesson booking via hybrid HTTP API + browser automation
 
-![Version](https://img.shields.io/badge/version-1.3.2-blue) ![License: MIT](https://img.shields.io/badge/License-MIT-green) ![Node >= 18](https://img.shields.io/badge/node-%3E%3D18-brightgreen)
+![Version](https://img.shields.io/badge/version-1.3.3-blue) ![License: MIT](https://img.shields.io/badge/License-MIT-green) ![Node >= 18](https://img.shields.io/badge/node-%3E%3D18-brightgreen)
 
 ## Features
 
@@ -16,7 +16,7 @@ italki Mandarin Chinese teacher search, indexing, and lesson booking via hybrid 
 - **check-availability** — View a teacher's available time slots
 - **book-lesson** — Book a lesson (preview by default)
 - **list-lessons** — View upcoming/past lessons
-- **reset** — Close browser and clear session
+- **reset** — Clear saved login state and close any browser owned by this process
 - Local
 - **budget** — View or set monthly lesson budget
 - **notes** — Add or view lesson notes for a teacher
@@ -61,13 +61,13 @@ npm --prefix scripts run cli -- search-teachers
 
 ### Browser Commands (Opens Headed Browser)
 
-| Command              | Purpose                               |
-| -------------------- | ------------------------------------- |
-| `login`              | Authenticate with italki              |
-| `check-availability` | View a teacher's available time slots |
-| `book-lesson`        | Book a lesson (preview by default)    |
-| `list-lessons`       | View upcoming/past lessons            |
-| `reset`              | Close browser and clear session       |
+| Command              | Purpose                                                             |
+| -------------------- | ------------------------------------------------------------------- |
+| `login`              | Authenticate with italki                                            |
+| `check-availability` | View a teacher's available time slots                               |
+| `book-lesson`        | Book a lesson (preview by default)                                  |
+| `list-lessons`       | View upcoming/past lessons                                          |
+| `reset`              | Clear saved login state and close any browser owned by this process |
 
 ### Local Commands
 
